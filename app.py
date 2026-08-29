@@ -39,37 +39,59 @@ def get_spreadsheet_id():
 def get_credentials():
     """Get Google OAuth credentials.
 
-    - LOCAL: Reuses token from google-workspace skill
-    - STREAMLIT CLOUD: Reconstructs from st.secrets
+    - STREAMLIT CLOUD: Uses st.secrets (REQUIRED)
+    - LOCAL: Falls back to google-workspace skill token
     """
     # Try Streamlit secrets first (for cloud deployment)
     try:
-        if "google_token" in st.secrets and "google_client_secret" in st.secrets:
+        if "google_token" in st.secrets:
             from google.oauth2.credentials import Credentials
-            from google_auth_oauthlib.flow import InstalledAppFlow
             from google.auth.transport.requests import Request
 
             token_info = json.loads(st.secrets["google_token"])
-            SCOPES = [
+            # Use scopes from secrets if provided, else default
+            scopes = token_info.get("scopes") or [
+                "https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/spreadsheets.readonly",
+                "https://www.googleapis.com/auth/documents",
                 "https://www.googleapis.com/auth/documents.readonly",
+                "https://www.googleapis.com/auth/drive",
                 "https://www.googleapis.com/auth/drive.readonly",
             ]
-            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            creds = Credentials.from_authorized_user_info(token_info, scopes)
 
             # Refresh if expired
             if creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             return creds
-    except Exception:
+    except Exception as e:
+        # In cloud, if secrets fail, give clear error — don't fall back to local path
+        if not os.path.exists(r"C:\Users"):
+            st.error(
+                f"❌ Failed to load Google credentials from secrets.\n\n"
+                f"Error: `{e}`\n\n"
+                f"Please configure `google_token` in Streamlit Cloud Secrets. "
+                f"See DEPLOY.md for the format."
+            )
+            st.stop()
+        # In local, continue to fallback
         pass
 
-    # Fallback: import from local google-workspace skill
+    # LOCAL FALLBACK: import from google-workspace skill
     SKILL_PATH = r"C:\Users\Handra\AppData\Local\hermes\skills\productivity\google-workspace\scripts"
     if SKILL_PATH not in sys.path:
         sys.path.insert(0, SKILL_PATH)
-    from google_api import get_credentials as local_get_credentials
-    return local_get_credentials()
+    try:
+        from google_api import get_credentials as local_get_credentials
+        return local_get_credentials()
+    except Exception as e:
+        st.error(
+            f"❌ Failed to load Google credentials.\n\n"
+            f"Local fallback error: `{e}`\n\n"
+            f"Make sure `google_token` is set in Streamlit Cloud Secrets, "
+            f"or the google-workspace skill is set up locally."
+        )
+        st.stop()
 
 SHEET_NAME = "Sheet1"
 DATA_START_ROW = 6  # data starts at row 6
