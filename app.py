@@ -128,6 +128,9 @@ def load_data():
     df = df.dropna(subset=["Date Applied", "No"]).copy()
     df["No"] = df["No"].astype(int)
     df["Days Since Applied"] = (datetime.now() - df["Date Applied"]).dt.days
+    df.attrs["raw_rows"] = len(values)
+    df.attrs["dropped_rows"] = len(values) - len(df)
+    df.attrs["duplicate_no"] = int(df["No"].duplicated().sum())
     df["Week"] = df["Date Applied"].dt.to_period("W").dt.start_time
     df["Month"] = df["Date Applied"].dt.to_period("M").astype(str)
     return df
@@ -238,6 +241,13 @@ with st.expander("Ringkasan data terfilter", expanded=True):
         f"**{per_week:.1f} lamaran per minggu**. Sumber paling banyak dipakai: **{best_source}**. "
         f"Umur rata-rata lamaran: **{avg_age:.1f} hari**."
     )
+    issues = []
+    if df.attrs.get("dropped_rows", 0):
+        issues.append(f"{df.attrs['dropped_rows']} row tidak masuk visualisasi karena Date Applied atau No tidak valid")
+    if df.attrs.get("duplicate_no", 0):
+        issues.append(f"{df.attrs['duplicate_no']} nilai No duplikat ditemukan")
+    if issues:
+        st.warning("Data quality: " + "; ".join(issues) + ".")
 
 # ============================================================================
 # CHARTS
@@ -269,14 +279,27 @@ with tab_overview:
         st.plotly_chart(tune(fig), use_container_width=True)
         explain("Keterangan", "Menunjukkan komposisi status. Porsi Applied dan No Response yang tinggi berarti banyak lamaran masih menunggu tindak lanjut.")
     with c2:
-        funnel = pd.DataFrame({
-            "Stage": ["Submitted", "Responded", "Interview", "Closed"],
-            "Count": [total, responded, interview, rejected + interview_r],
+        pipeline = pd.DataFrame({
+            "Category": ["Open", "No Response", "Interview", "Rejected"],
+            "Count": [applied, no_response, interview, rejected + interview_r],
         })
-        fig = go.Figure(go.Funnel(y=funnel["Stage"], x=funnel["Count"], textinfo="value+percent initial"))
-        fig.update_layout(title="Application Funnel")
+        fig = px.bar(
+            pipeline,
+            x="Category",
+            y="Count",
+            text="Count",
+            title="Application Outcome Breakdown",
+            color="Category",
+            color_discrete_map={
+                "Open": STATUS_COLORS["Applied"],
+                "No Response": STATUS_COLORS["No Response"],
+                "Interview": STATUS_COLORS["Interview"],
+                "Rejected": STATUS_COLORS["Rejected"],
+            },
+        )
+        fig.update_traces(textposition="outside")
         st.plotly_chart(tune(fig), use_container_width=True)
-        explain("Keterangan", "Funnel memperlihatkan penyusutan dari lamaran terkirim ke respons, interview, dan status tertutup.")
+        explain("Keterangan", "Breakdown ini tidak menganggap proses selalu linear. Rejected dapat terjadi tanpa interview, jadi status akhir ditampilkan sebagai kategori hasil.")
 
 with tab_channels:
     c1, c2 = st.columns(2)
@@ -308,7 +331,7 @@ with tab_channels:
             source_stats,
             x="Total",
             y="Response Rate %",
-            size="Interview" if source_stats["Interview"].sum() else "Total",
+            size="Total",
             color="Interview Rate %",
             hover_name="Source",
             title="Source Quality: Volume vs Response Rate",
@@ -316,7 +339,7 @@ with tab_channels:
         )
         fig.update_layout(xaxis_title="Total Applications", yaxis_title="Response Rate (%)")
         st.plotly_chart(tune(fig), use_container_width=True)
-        explain("Keterangan", "Titik kanan berarti volume tinggi. Titik atas berarti respons lebih baik. Prioritaskan sumber yang berada kanan-atas.")
+        explain("Keterangan", "Titik kanan berarti volume tinggi, ukuran bubble juga mengikuti total lamaran agar sumber besar tidak hilang meskipun belum menghasilkan interview.")
 
     c3, c4 = st.columns(2)
     with c3:
@@ -348,14 +371,16 @@ with tab_channels:
 with tab_timing:
     c1, c2 = st.columns(2)
     with c1:
-        daily = filtered.groupby("Date Applied").size().reset_index(name="Count").sort_values("Date Applied")
+        date_index = pd.date_range(start=start_date, end=end_date, freq="D")
+        daily = filtered.groupby("Date Applied").size().reindex(date_index, fill_value=0).reset_index()
+        daily.columns = ["Date Applied", "Count"]
         daily["7-Day Average"] = daily["Count"].rolling(7, min_periods=1).mean()
         fig = go.Figure()
         fig.add_bar(x=daily["Date Applied"], y=daily["Count"], name="Daily applications", marker_color="#93c5fd")
         fig.add_trace(go.Scatter(x=daily["Date Applied"], y=daily["7-Day Average"], name="7-day average", line=dict(color="#1d4ed8", width=3)))
         fig.update_layout(title="Applications Over Time", xaxis_title="Date", yaxis_title="Applications")
         st.plotly_chart(tune(fig), use_container_width=True)
-        explain("Keterangan", "Bar menunjukkan jumlah harian. Garis rata-rata 7 hari membantu melihat tren tanpa terlalu terpengaruh lonjakan satu hari.")
+        explain("Keterangan", "Bar menunjukkan jumlah per kalender harian, termasuk hari kosong. Garis rata-rata 7 hari menghitung hari tanpa lamaran sebagai 0 agar tren tidak terlalu tinggi.")
     with c2:
         weekly_status = filtered.groupby(["Week", "Status"]).size().reset_index(name="Count")
         fig = px.area(
