@@ -11,7 +11,6 @@ SPREADSHEET_ID is read from env var / secrets, never hardcoded.
 
 import json
 import os
-import sys
 from datetime import datetime
 
 import pandas as pd
@@ -39,24 +38,13 @@ def get_spreadsheet_id():
 # ============================================================================
 def get_credentials():
     """Get Google OAuth credentials for Streamlit Cloud or local dev."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    token_info = None
     try:
         if "google_token" in st.secrets:
-            from google.auth.transport.requests import Request
-            from google.oauth2.credentials import Credentials
-
             token_info = json.loads(st.secrets["google_token"])
-            scopes = token_info.get("scopes") or [
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/spreadsheets.readonly",
-                "https://www.googleapis.com/auth/documents",
-                "https://www.googleapis.com/auth/documents.readonly",
-                "https://www.googleapis.com/auth/drive",
-                "https://www.googleapis.com/auth/drive.readonly",
-            ]
-            creds = Credentials.from_authorized_user_info(token_info, scopes)
-            if creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            return creds
     except Exception as e:
         if not os.path.exists(r"C:\Users"):
             st.error(
@@ -67,21 +55,32 @@ def get_credentials():
             )
             st.stop()
 
-    skill_path = r"C:\Users\Handra\AppData\Local\hermes\skills\productivity\google-workspace\scripts"
-    if skill_path not in sys.path:
-        sys.path.insert(0, skill_path)
-    try:
-        from google_api import get_credentials as local_get_credentials
+    if token_info is None:
+        token_path = r"C:\Users\Handra\AppData\Local\hermes\google_token.json"
+        try:
+            with open(token_path, encoding="utf-8") as f:
+                token_info = json.load(f)
+        except Exception as e:
+            st.error(
+                f"Failed to load Google credentials.\n\n"
+                f"Local token error: `{e}`\n\n"
+                f"Make sure `google_token` is set in Streamlit Cloud Secrets, "
+                f"or the local Hermes token exists at `{token_path}`."
+            )
+            st.stop()
 
-        return local_get_credentials()
-    except Exception as e:
-        st.error(
-            f"Failed to load Google credentials.\n\n"
-            f"Local fallback error: `{e}`\n\n"
-            f"Make sure `google_token` is set in Streamlit Cloud Secrets, "
-            f"or the google-workspace skill is set up locally."
-        )
-        st.stop()
+    scopes = token_info.get("scopes") or [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/documents.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = Credentials.from_authorized_user_info(token_info, scopes)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    return creds
 
 
 SHEET_NAME = "Sheet1"
@@ -257,7 +256,6 @@ with tab_overview:
     with c1:
         status_counts = filtered["Status"].value_counts().reindex(STATUS_ORDER).dropna().reset_index()
         status_counts.columns = ["Status", "Count"]
-        status_counts["Share"] = status_counts["Count"].apply(lambda x: pct(x, total))
         fig = px.pie(
             status_counts,
             values="Count",
@@ -266,7 +264,6 @@ with tab_overview:
             hole=0.45,
             color="Status",
             color_discrete_map=STATUS_COLORS,
-            hover_data={"Share": ":.1f"},
         )
         fig.update_traces(textinfo="label+percent", hovertemplate="%{label}<br>%{value} lamaran<br>%{percent}<extra></extra>")
         st.plotly_chart(tune(fig), use_container_width=True)
