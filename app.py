@@ -162,6 +162,7 @@ def tune(fig, height=390):
     return fig
 
 
+
 # ============================================================================
 # UI
 # ============================================================================
@@ -411,38 +412,170 @@ with tab_timing:
         explain("Keterangan", "Heatmap membantu melihat bulan dan hari yang paling padat aktivitas lamaran.")
 
 with tab_aging:
-    c1, c2 = st.columns(2)
-    with c1:
-        bins = [-1, 7, 14, 30, 60, 9999]
-        labels = ["0-7 days", "8-14 days", "15-30 days", "31-60 days", "60+ days"]
-        aging = filtered.copy()
-        aging["Age Bucket"] = pd.cut(aging["Days Since Applied"], bins=bins, labels=labels)
-        age_status = aging.groupby(["Age Bucket", "Status"], observed=False).size().reset_index(name="Count")
-        fig = px.bar(age_status, x="Age Bucket", y="Count", color="Status", title="Application Aging by Status", color_discrete_map=STATUS_COLORS, text="Count")
-        fig.update_traces(textposition="inside")
-        st.plotly_chart(tune(fig), use_container_width=True)
-        explain("Keterangan", "Bucket umur membantu menentukan lamaran mana yang sudah cukup lama untuk dipantau atau ditindaklanjuti.")
-    with c2:
-        follow_up = filtered[filtered["Status"].isin(["Applied", "No Response"])].sort_values("Days Since Applied", ascending=False).head(15)
-        fig = px.bar(
-            follow_up,
-            x="Days Since Applied",
-            y="Company",
-            color="Status",
-            orientation="h",
-            title="Oldest Open Applications",
-            hover_data=["Job Title", "Source", "Date Applied"],
-            color_discrete_map=STATUS_COLORS,
-        )
-        fig.update_layout(yaxis=dict(autorange="reversed"), xaxis_title="Days Since Applied")
-        st.plotly_chart(tune(fig), use_container_width=True)
-        explain("Keterangan", "Daftar ini mengurutkan lamaran terbuka paling lama, berguna untuk prioritas follow-up.")
+    bins = [-1, 7, 14, 30, 60, 9999]
+    labels = ["0-7 days", "8-14 days", "15-30 days", "31-60 days", "60+ days"]
+    open_statuses = ["Applied", "No Response"]
+    follow_up = filtered[filtered["Status"].isin(open_statuses)].sort_values("Days Since Applied", ascending=False)
+    aging_full = filtered.copy()
+    aging_full["Age Bucket"] = pd.cut(aging_full["Days Since Applied"], bins=bins, labels=labels)
+    aging_full = aging_full[aging_full["Age Bucket"].notna()]
 
-    st.subheader("Detailed Follow-up Candidates")
-    detail_cols = ["Date Applied", "Company", "Job Title", "Source", "CV Used", "Status", "Days Since Applied", "Link"]
-    follow_display = follow_up[detail_cols].copy()
-    follow_display["Date Applied"] = follow_display["Date Applied"].dt.strftime("%d/%m/%Y")
-    st.dataframe(follow_display, use_container_width=True, hide_index=True)
+    st.caption(
+        "Section ini memisahkan lamaran aktif (Applied dan No Response) yang masih menunggu tindak lanjut. "
+        "Bucket umur membantu memprioritaskan siapa yang harus dipantau atau diikuti up."
+    )
+
+    if follow_up.empty:
+        st.info("Tidak ada lamaran terbuka pada filter saat ini. Pilih Applied atau No Response pada filter Status untuk melihat kandidat follow-up.")
+    else:
+        overdue_30 = int((follow_up["Days Since Applied"] >= 30).sum())
+        overdue_14 = int((follow_up["Days Since Applied"] >= 14).sum())
+        oldest_age = int(follow_up["Days Since Applied"].max())
+        median_age = float(follow_up["Days Since Applied"].median())
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Open Applications", len(follow_up))
+        k2.metric("Older than 14 days", overdue_14, help="Lamaran terbuka yang sudah lewat dari 2 minggu.")
+        k3.metric("Older than 30 days", overdue_30, help="Kandidat kuat untuk dikirimkan follow-up atau ditutup.")
+        k4.metric("Oldest age (days)", oldest_age, help="Lamaran terbuka paling lama.")
+        explain("Median umur", f"{median_age:.1f} hari")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            age_status = aging_full.groupby(["Age Bucket", "Status"], observed=False).size().reset_index(name="Count")
+            fig = px.bar(
+                age_status,
+                x="Age Bucket",
+                y="Count",
+                color="Status",
+                title="Application Aging by Status",
+                color_discrete_map=STATUS_COLORS,
+                text="Count",
+                category_orders={"Age Bucket": labels},
+            )
+            fig.update_traces(textposition="inside")
+            fig.update_layout(xaxis_title="Age bucket", yaxis_title="Applications")
+            st.plotly_chart(tune(fig), use_container_width=True)
+            explain(
+                "Keterangan",
+                "Bar menunjukkan jumlah lamaran per bucket umur diwarnai menurut status. "
+                "Perhatikan bucket 31-60 dan 60+ untuk sumber yang perlu ditindaklanjuti."
+            )
+
+        with c2:
+            age_cum = (
+                aging_full[aging_full["Status"].isin(open_statuses)]
+                .groupby("Age Bucket", observed=False)
+                .size()
+                .reindex(labels, fill_value=0)
+                .cumsum()
+                .reset_index(name="Open cumulative")
+            )
+            fig = px.line(
+                age_cum,
+                x="Age Bucket",
+                y="Open cumulative",
+                markers=True,
+                title="Open Applications Cumulative Curve",
+                category_orders={"Age Bucket": labels},
+            )
+            fig.update_traces(line_color="#1d4ed8", line_width=3, marker_size=9)
+            fig.update_traces(text=age_cum["Open cumulative"], textposition="top center")
+            fig.update_layout(yaxis_title="Cumulative open", xaxis_title="Age bucket")
+            st.plotly_chart(tune(fig), use_container_width=True)
+            explain(
+                "Keterangan",
+                "Garis kumulatif ini menunjukkan berapa banyak lamaran terbuka yang berusia di atas threshold tertentu. "
+                "Titik 30+ hari adalah signal untuk follow-up."
+            )
+
+        c3, c4 = st.columns(2)
+        with c3:
+            source_age = (
+                follow_up.groupby(["Source", "Age Bucket"], observed=False)
+                .size()
+                .reset_index(name="Count")
+            )
+            fig = px.bar(
+                source_age,
+                x="Source",
+                y="Count",
+                color="Age Bucket",
+                title="Open Aging by Source",
+                category_orders={"Age Bucket": labels},
+                color_discrete_sequence=px.colors.sequential.YlOrRd,
+                text="Count",
+            )
+            fig.update_traces(textposition="inside")
+            fig.update_layout(xaxis_tickangle=-30, yaxis_title="Open applications")
+            st.plotly_chart(tune(fig), use_container_width=True)
+            explain(
+                "Keterangan",
+                "Sumber yang banyak lamaran terbuka tua layak dievaluasi. "
+                "Warna lebih gelap menandakan bucket umur lebih lama."
+            )
+
+        with c4:
+            top = follow_up.head(15).copy()
+            top["Label"] = top["Company"] + " - " + top["Job Title"].fillna("")
+            fig = px.bar(
+                top,
+                x="Days Since Applied",
+                y="Label",
+                color="Status",
+                orientation="h",
+                title="Top 15 Oldest Open Applications",
+                color_discrete_map=STATUS_COLORS,
+                hover_data={"Days Since Applied": True, "Source": True, "Date Applied": True, "Label": False},
+            )
+            fig.update_layout(
+                yaxis=dict(autorange="reversed", title="Company - Job Title"),
+                xaxis_title="Days since applied",
+                height=520,
+            )
+            st.plotly_chart(tune(fig, height=520), use_container_width=True)
+            explain(
+                "Keterangan",
+                "Urutan prioritas follow-up berdasarkan lamaran terbuka paling lama. "
+                "Gunakan tabel detail di bawah untuk menyalin link lowongan."
+            )
+
+        st.subheader("Detailed Follow-up Candidates")
+        st.caption(
+            "TABEL FOLLOW-UP: kandidat disaring berurutan dari umur terlama ke termuda. "
+            "Gunakan search box untuk mencari perusahaan atau judul tertentu. "
+            "Kolom Link membuka lowongan asli."
+        )
+        detail_cols = ["Date Applied", "Company", "Job Title", "Source", "CV Used", "Type", "Status", "Days Since Applied", "Link"]
+        follow_display = follow_up[detail_cols].copy()
+        follow_display["Date Applied"] = follow_display["Date Applied"].dt.strftime("%d/%m/%Y")
+        follow_display = follow_display.rename(columns={"Days Since Applied": "Age (days)"})
+
+        def style_age(val):
+            if not isinstance(val, (int, float)):
+                return ""
+            if val >= 30:
+                return "background-color: #fee2e2; color: #991b1b; font-weight: 600"
+            if val >= 14:
+                return "background-color: #fef3c7; color: #92400e; font-weight: 600"
+            return "background-color: #ecfdf5; color: #065f46"
+
+        styled_follow = follow_display.style.map(color_status, subset=["Status"]).map(style_age, subset=["Age (days)"])
+        st.dataframe(
+            styled_follow,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Date Applied": st.column_config.TextColumn("Date Applied", width="small"),
+                "Company": st.column_config.TextColumn("Company", width="medium"),
+                "Job Title": st.column_config.TextColumn("Job Title", width="large"),
+                "Source": st.column_config.TextColumn("Source", width="small"),
+                "CV Used": st.column_config.TextColumn("CV", width="small"),
+                "Type": st.column_config.TextColumn("Type", width="small"),
+                "Status": st.column_config.TextColumn("Status", width="small"),
+                "Age (days)": st.column_config.NumberColumn("Age (days)", width="small"),
+                "Link": st.column_config.LinkColumn("Link", width="small", display_text="Open"),
+            },
+        )
 
 # ============================================================================
 # DATA TABLE
