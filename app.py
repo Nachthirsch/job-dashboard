@@ -491,7 +491,8 @@ with tab_aging:
         c3, c4 = st.columns(2)
         with c3:
             source_age = (
-                follow_up.groupby(["Source", "Age Bucket"], observed=False)
+                aging_full[aging_full["Status"].isin(open_statuses)]
+                .groupby(["Source", "Age Bucket"], observed=False)
                 .size()
                 .reset_index(name="Count")
             )
