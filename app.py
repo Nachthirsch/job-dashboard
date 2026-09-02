@@ -94,6 +94,16 @@ STATUS_COLORS = {
     "No Response": "#6b7280",
 }
 
+def color_status(val):
+    color_map = {
+        "Applied": "background-color: #dbeafe; color: #1e40af",
+        "Interview": "background-color: #d1fae5; color: #065f46",
+        "Interview-R": "background-color: #fed7aa; color: #9a3412",
+        "Rejected": "background-color: #fee2e2; color: #991b1b",
+        "No Response": "background-color: #f3f4f6; color: #374151",
+    }
+    return color_map.get(val, "")
+
 st.set_page_config(
     page_title="Job Application Dashboard",
     layout="wide",
@@ -588,15 +598,6 @@ display_df = filtered.copy()
 display_df["Date Applied"] = display_df["Date Applied"].dt.strftime("%d/%m/%Y")
 
 
-def color_status(val):
-    color_map = {
-        "Applied": "background-color: #dbeafe; color: #1e40af",
-        "Interview": "background-color: #d1fae5; color: #065f46",
-        "Interview-R": "background-color: #fed7aa; color: #9a3412",
-        "Rejected": "background-color: #fee2e2; color: #991b1b",
-        "No Response": "background-color: #f3f4f6; color: #374151",
-    }
-    return color_map.get(val, "")
 
 styled = display_df.style.map(color_status, subset=["Status"])
 st.dataframe(
